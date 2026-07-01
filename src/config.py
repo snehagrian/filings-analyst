@@ -1,16 +1,39 @@
 import os
+import sys
 
 from dotenv import load_dotenv
 from langchain_core.language_models.chat_models import BaseChatModel
 
 load_dotenv()
 
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1")
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-SEC_USER_AGENT = os.getenv("SEC_USER_AGENT")
+
+def _get(key: str, default: str | None = None) -> str | None:
+    """Read a setting from the environment (.env) or Streamlit secrets.
+
+    Environment variables take precedence. Streamlit secrets are consulted only
+    when streamlit is already loaded (i.e. inside the app), so CLI scripts don't
+    pull in streamlit or require a secrets file.
+    """
+    value = os.getenv(key)
+    if value not in (None, ""):
+        return value
+
+    streamlit = sys.modules.get("streamlit")
+    if streamlit is not None:
+        try:
+            if key in streamlit.secrets:
+                return str(streamlit.secrets[key])
+        except Exception:
+            pass
+    return default
+
+
+LLM_PROVIDER = _get("LLM_PROVIDER", "groq")
+GROQ_API_KEY = _get("GROQ_API_KEY")
+GROQ_MODEL = _get("GROQ_MODEL", "llama-3.3-70b-versatile")
+OLLAMA_MODEL = _get("OLLAMA_MODEL", "llama3.1")
+OLLAMA_BASE_URL = _get("OLLAMA_BASE_URL", "http://localhost:11434")
+SEC_USER_AGENT = _get("SEC_USER_AGENT")
 
 
 def get_llm() -> BaseChatModel:
@@ -19,7 +42,9 @@ def get_llm() -> BaseChatModel:
         from langchain_groq import ChatGroq
 
         if not GROQ_API_KEY:
-            raise RuntimeError("GROQ_API_KEY is not set. Add it to your .env file.")
+            raise RuntimeError(
+                "GROQ_API_KEY is not set. Add it to your .env file or Streamlit secrets."
+            )
         return ChatGroq(api_key=GROQ_API_KEY, model=GROQ_MODEL)
 
     if LLM_PROVIDER == "ollama":

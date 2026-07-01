@@ -1,0 +1,13 @@
+langgraph
+langchain
+langchain-community
+langchain-groq
+langchain-ollama
+chromadb
+sentence-transformers
+sec-edgar-api
+pyrate-limiter<4
+beautifulsoup4
+lxml
+python-dotenv
+streamlit

@@ -31,6 +31,7 @@ def _get(key: str, default: str | None = None) -> str | None:
 LLM_PROVIDER = _get("LLM_PROVIDER", "groq")
 GROQ_API_KEY = _get("GROQ_API_KEY")
 GROQ_MODEL = _get("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_FALLBACK_MODEL = _get("GROQ_FALLBACK_MODEL", "llama-3.1-8b-instant")
 OLLAMA_MODEL = _get("OLLAMA_MODEL", "llama3.1")
 OLLAMA_BASE_URL = _get("OLLAMA_BASE_URL", "http://localhost:11434")
 SEC_USER_AGENT = _get("SEC_USER_AGENT")
@@ -39,20 +40,23 @@ SEC_USER_AGENT = _get("SEC_USER_AGENT")
 def get_llm() -> BaseChatModel:
     """Return the configured chat model, selected by LLM_PROVIDER."""
     if LLM_PROVIDER == "groq":
-        from langchain_groq import ChatGroq
-
-        if not GROQ_API_KEY:
-            raise RuntimeError(
-                "GROQ_API_KEY is not set. Add it to your .env file or Streamlit secrets."
-            )
-        return ChatGroq(api_key=GROQ_API_KEY, model=GROQ_MODEL)
+        return get_groq_llm()
 
     if LLM_PROVIDER == "ollama":
-        from langchain_ollama import ChatOllama
-
-        return ChatOllama(model=OLLAMA_MODEL, base_url=OLLAMA_BASE_URL)
+        return get_ollama_llm()
 
     raise ValueError(f"Unknown LLM_PROVIDER '{LLM_PROVIDER}'. Use 'groq' or 'ollama'.")
+
+
+def get_groq_llm(model: str | None = None) -> BaseChatModel:
+    """Return a Groq chat model for the given model name."""
+    from langchain_groq import ChatGroq
+
+    if not GROQ_API_KEY:
+        raise RuntimeError(
+            "GROQ_API_KEY is not set. Add it to your .env file or Streamlit secrets."
+        )
+    return ChatGroq(api_key=GROQ_API_KEY, model=model or GROQ_MODEL)
 
 
 def get_ollama_llm() -> BaseChatModel:

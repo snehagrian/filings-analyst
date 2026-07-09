@@ -1,5 +1,6 @@
 import os
 import sys
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -64,3 +65,18 @@ def get_ollama_llm() -> BaseChatModel:
     from langchain_ollama import ChatOllama
 
     return ChatOllama(model=OLLAMA_MODEL, base_url=OLLAMA_BASE_URL)
+
+
+def ollama_fallback_enabled() -> bool:
+    """Return True when the Ollama endpoint looks reachable from cloud.
+
+    The default localhost URL is only valid on a developer machine. In cloud
+    deployments we only use Ollama when the base URL is a non-local host or the
+    user explicitly opts in via OLLAMA_FALLBACK=1.
+    """
+    if os.getenv("OLLAMA_FALLBACK", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return True
+
+    parsed = urlparse(OLLAMA_BASE_URL or "")
+    host = (parsed.hostname or "").lower()
+    return host not in {"", "localhost", "127.0.0.1", "::1"}

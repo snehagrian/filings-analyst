@@ -14,7 +14,14 @@ from typing import TypedDict
 from langchain_core.documents import Document
 from langgraph.graph import END, START, StateGraph
 
-from src.config import GROQ_FALLBACK_MODEL, LLM_PROVIDER, get_groq_llm, get_llm, get_ollama_llm
+from src.config import (
+    GROQ_FALLBACK_MODEL,
+    LLM_PROVIDER,
+    get_groq_llm,
+    get_llm,
+    get_ollama_llm,
+    ollama_fallback_enabled,
+)
 from src.index import get_embeddings, get_vectorstore
 
 MAX_ROUNDS = 3
@@ -271,10 +278,9 @@ def build_agent():
     llm = get_llm()
     fallback_llms = ()
     if LLM_PROVIDER == "groq":
-        fallback_llms = (
-            get_groq_llm(GROQ_FALLBACK_MODEL),
-            get_ollama_llm(),
-        )
+        fallback_llms = (get_groq_llm(GROQ_FALLBACK_MODEL),)
+        if ollama_fallback_enabled():
+            fallback_llms = fallback_llms + (get_ollama_llm(),)
     vectorstore = get_vectorstore(get_embeddings())
     available_tickers = _load_available_tickers(vectorstore)
     alias_map = _build_alias_map(available_tickers)

@@ -14,7 +14,7 @@ from typing import TypedDict
 from langchain_core.documents import Document
 from langgraph.graph import END, START, StateGraph
 
-from src.config import get_llm
+from src.config import LLM_PROVIDER, get_llm, get_ollama_llm
 from src.index import get_embeddings, get_vectorstore
 
 MAX_ROUNDS = 3
@@ -103,14 +103,27 @@ def _is_rate_limit_error(exc: Exception) -> bool:
     return "ratelimit" in name or "rate limit" in message or "429" in message
 
 
-def _invoke_llm(llm, prompt: str, *, node: str) -> str:
-    """Invoke the chat model with a small retry loop for transient rate limits."""
+def _invoke_llm(llm, prompt: str, *, node: str, fallback_llm=None) -> str:
+    """Invoke the chat model with retry, then optionally fall back to Ollama."""
     last_error: Exception | None = None
+    fallback_tried = False
     for attempt in range(1, _LLM_RETRY_ATTEMPTS + 1):
         try:
             return str(llm.invoke(prompt).content)
         except Exception as exc:  # noqa: BLE001 - surfaced with a clearer message below
             last_error = exc
+            if (
+                fallback_llm is not None
+                and not fallback_tried
+                and _is_rate_limit_error(exc)
+            ):
+                fallback_tried = True
+                try:
+                    return str(fallback_llm.invoke(prompt).content)
+                except Exception as fallback_exc:  # noqa: BLE001
+                    last_error = fallback_exc
+                    if not _is_rate_limit_error(fallback_exc):
+                        break
             if not _is_rate_limit_error(exc) or attempt == _LLM_RETRY_ATTEMPTS:
                 break
             delay = _LLM_RETRY_BASE_DELAY * (2 ** (attempt - 1))
@@ -259,6 +272,7 @@ def build_agent():
     by the node functions, so the embedding model is not reloaded each round.
     """
     llm = get_llm()
+    fallback_llm = get_ollama_llm() if LLM_PROVIDER == "groq" else None
     vectorstore = get_vectorstore(get_embeddings())
     available_tickers = _load_available_tickers(vectorstore)
     alias_map = _build_alias_map(available_tickers)
@@ -273,7 +287,7 @@ def build_agent():
             "queries, one per line, with no numbering, bullets, or extra text.\n\n"
             f"Question: {state['question']}"
         )
-        raw = _invoke_llm(llm, prompt, node="plan")
+        raw = _invoke_llm(llm, prompt, node="plan", fallback_llm=fallback_llm)
         sub_queries = []
         for line in str(raw).splitlines():
             cleaned = re.sub(r"^[\s\-\*\d\.\)]+", "", line).strip()
@@ -335,7 +349,7 @@ def build_agent():
             "filing's prose. Do NOT use form types, filing dates, accession "
             "numbers, or section labels like 'Item 1A'. Otherwise NONE>"
         )
-        raw = _invoke_llm(llm, prompt, node="grade")
+        raw = _invoke_llm(llm, prompt, node="grade", fallback_llm=fallback_llm)
 
         decision = "insufficient" if re.search(r"insufficient", raw, re.I) else "sufficient"
         query_match = re.search(r"QUERY:\s*(.+)", raw, re.I)
@@ -357,7 +371,7 @@ def build_agent():
             f"Excerpts:\n{context}\n\n"
             "Answer:"
         )
-        answer = _invoke_llm(llm, prompt, node="synthesize")
+        answer = _invoke_llm(llm, prompt, node="synthesize", fallback_llm=fallback_llm)
         return {"answer": answer}
 
     def verify(state: AgentState) -> dict:
@@ -388,7 +402,7 @@ def build_agent():
             "new claims or reword supported ones. If nothing is supported, write "
             "exactly: NONE>"
         )
-        raw = _invoke_llm(llm, prompt, node="verify")
+        raw = _invoke_llm(llm, prompt, node="verify", fallback_llm=fallback_llm)
 
         verdict_match = re.search(r"VERDICT:\s*(\w+)", raw, re.I)
         verdict = verdict_match.group(1).lower() if verdict_match else "complete"

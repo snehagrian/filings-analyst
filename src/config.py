@@ -53,3 +53,10 @@ def get_llm() -> BaseChatModel:
         return ChatOllama(model=OLLAMA_MODEL, base_url=OLLAMA_BASE_URL)
 
     raise ValueError(f"Unknown LLM_PROVIDER '{LLM_PROVIDER}'. Use 'groq' or 'ollama'.")
+
+
+def get_ollama_llm() -> BaseChatModel:
+    """Return the local Ollama chat model, regardless of the active provider."""
+    from langchain_ollama import ChatOllama
+
+    return ChatOllama(model=OLLAMA_MODEL, base_url=OLLAMA_BASE_URL)

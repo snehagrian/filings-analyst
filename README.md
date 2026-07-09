@@ -66,6 +66,16 @@ Copy `.env.example` to `.env` and fill in:
 - `GROQ_API_KEY` — grab one from console.groq.com
 - `SEC_USER_AGENT` — SEC wants a name and email, e.g. `Jane Doe jane@example.com`
 
+If you want to use a local Ollama model on your own machine instead of Groq,
+set:
+
+- `LLM_PROVIDER=ollama`
+- `OLLAMA_BASE_URL=http://localhost:11434`
+- `OLLAMA_MODEL=llama3.1`
+
+If you keep `LLM_PROVIDER=groq`, make sure your own Groq API key is set in
+`.env` or in your deployment secrets.
+
 The repo ships with a prebuilt index for ten companies (Apple, Microsoft, Google,
 Nvidia, Amazon, Meta, Tesla, Netflix, Oracle, Walmart), so you can go straight to:
 
@@ -94,14 +104,22 @@ scripts/        small runnable checks for each piece
 ## Deploying
 
 It runs on Streamlit Community Cloud. Point it at `src/app.py`, and put
-`GROQ_API_KEY`, `LLM_PROVIDER`, and `SEC_USER_AGENT` in the app's Secrets. The
-prebuilt index is committed to the repo, so the app has data to answer from the
-moment it starts, and the on-demand fetching still works for anything new.
+`GROQ_API_KEY`, `LLM_PROVIDER`, and `SEC_USER_AGENT` in the app's Secrets.
+
+For a public deployment, every person using the app shares the same provider
+credentials, so you should add **your own** Groq key in Streamlit Secrets if
+you want to run your own instance. If you do not want to rely on Groq, you can
+instead configure a cloud-hosted Ollama endpoint and set `LLM_PROVIDER=ollama`
+or keep Groq as primary with Ollama as a fallback.
+
+The prebuilt index is committed to the repo, so the app has data to answer from
+the moment it starts, and the on-demand fetching still works for anything new.
 
 ## A few honest caveats
 
 - Groq's free tier has a tokens-per-minute cap. A big multi-hop question on a
-  large filing can occasionally hit it, so give it a minute and retry.
+  large filing can occasionally hit it, so give it a minute and retry. If you
+  deploy your own copy, use your own Groq key in Secrets.
 - The answer is only as good as the model and the chunks it pulled. On a thin
   corpus the verifier is strict, and it would rather give a bare answer than guess.
 - Embeddings run locally, so the first launch downloads the model (~130 MB) and

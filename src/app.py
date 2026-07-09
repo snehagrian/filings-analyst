@@ -562,7 +562,7 @@ def ensure_companies_indexed(question: str, current_tickers: set[str]):
     """
     try:
         tickers_data = load_tickers_data()
-    except Exception as exc:  # noqa: BLE001 - surfaced to the user, not swallowed
+    except Exception as exc:  # noqa: BLE001
         return [], [f"Couldn't load the SEC company list: {exc}"]
 
     resolved = resolve_companies(question, tickers_data)
@@ -623,46 +623,56 @@ def stream_answer(agent, question: str):
     confidence_note = None
 
     with st.status("Working through your question...", expanded=True) as status:
-        for step in agent.stream({"question": question}):
-            for node, update in step.items():
-                if node == "plan":
-                    st.markdown("**Plan — sub-queries:**")
-                    for q in update["sub_queries"]:
-                        st.markdown(f"- {q}")
-                elif node == "retrieve":
-                    hops = update["round"]
-                    st.markdown(
-                        f"**Retrieve — round {update['round']}:** "
-                        f"+{update['retrieved_count']} new chunks "
-                        f"({len(update['chunks'])} total)"
-                    )
-                elif node == "grade":
-                    st.markdown(f"**Grade — decision:** `{update['decision']}`")
-                    if update["decision"] == "insufficient" and update.get("reformulated_query"):
-                        st.caption(f"Follow-up (missing piece): {update['reformulated_query']}")
-                elif node == "synthesize":
-                    st.markdown("**Synthesize —** drafted a cited answer.")
-                elif node == "verify":
-                    st.markdown(f"**Verify —** {update.get('verification', '')}")
-                    flagged = update.get("flagged_claims") or []
-                    if flagged:
-                        st.markdown("Claims flagged as unsupported:")
-                        for c in flagged:
-                            st.markdown(f"- {c}")
-                    else:
-                        st.caption("No claims flagged as unsupported.")
-                    if update.get("verify_decision") == "needs_more":
-                        st.caption(
-                            f"Verification gap → one more retrieval: "
-                            f"{update.get('verify_followup')}"
+        try:
+            for step in agent.stream({"question": question}):
+                for node, update in step.items():
+                    if node == "plan":
+                        st.markdown("**Plan — sub-queries:**")
+                        for q in update["sub_queries"]:
+                            st.markdown(f"- {q}")
+                    elif node == "retrieve":
+                        hops = update["round"]
+                        st.markdown(
+                            f"**Retrieve — round {update['round']}:** "
+                            f"+{update['retrieved_count']} new chunks "
+                            f"({len(update['chunks'])} total)"
                         )
-                    if update.get("confidence_note"):
-                        confidence_note = update["confidence_note"]
-                    if update.get("final_answer"):
-                        final_answer = update["final_answer"]
-        status.update(
-            label=f"Done — {hops} retrieval round(s).", state="complete", expanded=False
-        )
+                    elif node == "grade":
+                        st.markdown(f"**Grade — decision:** `{update['decision']}`")
+                        if update["decision"] == "insufficient" and update.get("reformulated_query"):
+                            st.caption(f"Follow-up (missing piece): {update['reformulated_query']}")
+                    elif node == "synthesize":
+                        st.markdown("**Synthesize —** drafted a cited answer.")
+                    elif node == "verify":
+                        st.markdown(f"**Verify —** {update.get('verification', '')}")
+                        flagged = update.get("flagged_claims") or []
+                        if flagged:
+                            st.markdown("Claims flagged as unsupported:")
+                            for c in flagged:
+                                st.markdown(f"- {c}")
+                        else:
+                            st.caption("No claims flagged as unsupported.")
+                        if update.get("verify_decision") == "needs_more":
+                            st.caption(
+                                f"Verification gap → one more retrieval: "
+                                f"{update.get('verify_followup')}"
+                            )
+                        if update.get("confidence_note"):
+                            confidence_note = update["confidence_note"]
+                        if update.get("final_answer"):
+                            final_answer = update["final_answer"]
+            status.update(
+                label=f"Done — {hops} retrieval round(s).", state="complete", expanded=False
+            )
+        except Exception as exc:  # noqa: BLE001 - keep the app responsive on model failures
+            message = (
+                "Unable to finish the answer right now because the model provider "
+                "is rate-limited or unavailable. Please try again in a moment."
+            )
+            st.error(message)
+            st.caption(str(exc))
+            status.update(label="Stopped — model unavailable.", state="error", expanded=False)
+            return message, "Temporary model failure. No answer was generated.", hops
 
     return final_answer, confidence_note, hops
 
@@ -670,8 +680,10 @@ def stream_answer(agent, question: str):
 def _strip_scaffolding(text: str) -> str:
     """Remove format placeholders the model sometimes echoes into the answer."""
     text = re.sub(r"\(\s*no\s+(?:relevant\s+)?sources?\s*\)", "", text, flags=re.I)
-    text = re.sub(r"\s*\bNONE\b\s*$", "", text.strip(), flags=re.I)
-    return text.strip()
+    text = text.strip()
+    if text.upper().endswith("NONE"):
+        text = text[:-4].rstrip()
+    return text
 
 
 def render_result(final_answer: str | None, note: str | None, hops: int) -> str:

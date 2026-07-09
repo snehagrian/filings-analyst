@@ -3,6 +3,7 @@
 import json
 import re
 import sys
+import time
 from pathlib import Path
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -19,6 +20,8 @@ from src.index import get_embeddings, get_vectorstore
 MAX_ROUNDS = 3
 TOP_K = 4
 MAX_CONTEXT_CHUNKS = 16
+_LLM_RETRY_ATTEMPTS = 3
+_LLM_RETRY_BASE_DELAY = 1.5
 
 
 class AgentState(TypedDict, total=False):
@@ -91,6 +94,32 @@ def _retrieved_sources(chunks: list[Document]) -> str:
         if src not in seen:
             seen.append(src)
     return ", ".join(seen) if seen else "none"
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    """Return True when an exception looks like a provider rate limit."""
+    name = exc.__class__.__name__.lower()
+    message = str(exc).lower()
+    return "ratelimit" in name or "rate limit" in message or "429" in message
+
+
+def _invoke_llm(llm, prompt: str, *, node: str) -> str:
+    """Invoke the chat model with a small retry loop for transient rate limits."""
+    last_error: Exception | None = None
+    for attempt in range(1, _LLM_RETRY_ATTEMPTS + 1):
+        try:
+            return str(llm.invoke(prompt).content)
+        except Exception as exc:  # noqa: BLE001 - surfaced with a clearer message below
+            last_error = exc
+            if not _is_rate_limit_error(exc) or attempt == _LLM_RETRY_ATTEMPTS:
+                break
+            delay = _LLM_RETRY_BASE_DELAY * (2 ** (attempt - 1))
+            time.sleep(delay)
+
+    raise RuntimeError(
+        f"The LLM provider was rate-limited while running the {node} step. "
+        "Please retry in a moment."
+    ) from last_error
 
 
 _TICKER_ALIASES = {
@@ -244,7 +273,7 @@ def build_agent():
             "queries, one per line, with no numbering, bullets, or extra text.\n\n"
             f"Question: {state['question']}"
         )
-        raw = llm.invoke(prompt).content
+        raw = _invoke_llm(llm, prompt, node="plan")
         sub_queries = []
         for line in str(raw).splitlines():
             cleaned = re.sub(r"^[\s\-\*\d\.\)]+", "", line).strip()
@@ -306,7 +335,7 @@ def build_agent():
             "filing's prose. Do NOT use form types, filing dates, accession "
             "numbers, or section labels like 'Item 1A'. Otherwise NONE>"
         )
-        raw = str(llm.invoke(prompt).content)
+        raw = _invoke_llm(llm, prompt, node="grade")
 
         decision = "insufficient" if re.search(r"insufficient", raw, re.I) else "sufficient"
         query_match = re.search(r"QUERY:\s*(.+)", raw, re.I)
@@ -328,7 +357,7 @@ def build_agent():
             f"Excerpts:\n{context}\n\n"
             "Answer:"
         )
-        answer = str(llm.invoke(prompt).content)
+        answer = _invoke_llm(llm, prompt, node="synthesize")
         return {"answer": answer}
 
     def verify(state: AgentState) -> dict:
@@ -359,7 +388,7 @@ def build_agent():
             "new claims or reword supported ones. If nothing is supported, write "
             "exactly: NONE>"
         )
-        raw = str(llm.invoke(prompt).content)
+        raw = _invoke_llm(llm, prompt, node="verify")
 
         verdict_match = re.search(r"VERDICT:\s*(\w+)", raw, re.I)
         verdict = verdict_match.group(1).lower() if verdict_match else "complete"

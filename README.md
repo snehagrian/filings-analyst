@@ -115,12 +115,6 @@ or keep Groq as primary with Ollama as a fallback.
 The prebuilt index is committed to the repo, so the app has data to answer from
 the moment it starts, and the on-demand fetching still works for anything new.
 
-## A few honest caveats
-
-- Groq's free tier has a tokens-per-minute cap. A big multi-hop question on a
-  large filing can occasionally hit it, so give it a minute and retry. If you
-  deploy your own copy, use your own Groq key in Secrets.
-- The answer is only as good as the model and the chunks it pulled. On a thin
   corpus the verifier is strict, and it would rather give a bare answer than guess.
 - Embeddings run locally, so the first launch downloads the model (~130 MB) and
   needs a little memory.

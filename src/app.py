@@ -26,6 +26,21 @@ _NAME_SUFFIXES = re.compile(
 FILINGS_PER_FORM = 2
 MAX_ONDEMAND_COMPANIES = 3
 
+_COMPANY_NICKNAMES = {"google", "alphabet", "meta", "facebook"}
+_NAME_STOPWORDS = {
+    "compare", "what", "whats", "how", "why", "when", "who", "which", "the", "a",
+    "an", "tell", "show", "give", "list", "find", "explain", "describe", "is",
+    "are", "do", "does", "did", "and", "or", "vs", "versus", "between", "with",
+    "their", "its", "latest", "recent", "risk", "risks", "factor", "factors",
+    "report", "reports", "filing", "filings", "revenue", "revenues", "profit",
+    "profits", "growth", "strategy", "overview", "summary", "performance",
+    "business", "company", "companies", "please", "also", "about", "for", "in",
+    "of", "on", "to", "i", "me", "ai", "sec", "us", "usa", "u.s", "america",
+    "q1", "q2", "q3", "q4", "fy", "ceo", "cfo", "inc", "corp",
+    "january", "february", "march", "april", "may", "june", "july", "august",
+    "september", "october", "november", "december",
+}
+
 COMPANY_CHIPS = [
     ("Apple", "What are the key risk factors disclosed by Apple?"),
     ("Microsoft", "What are the key risk factors disclosed by Microsoft?"),
@@ -262,6 +277,68 @@ def resolve_companies(question: str, tickers_data: dict) -> dict[str, str]:
     return resolved
 
 
+@st.cache_resource(show_spinner=False)
+def _sec_name_index() -> set[str]:
+    """Set of lowercase names/symbols that identify a real SEC filer.
+
+    Includes every ticker symbol, each company's core name and its first word,
+    plus common nicknames. Used to tell whether a name in a question belongs to
+    a company that actually files with the SEC.
+    """
+    try:
+        data = load_tickers_data()
+    except Exception:
+        return set()
+    names: set[str] = set(_COMPANY_NICKNAMES)
+    for record in data.values():
+        names.add(str(record["ticker"]).lower())
+        core = _core_name(record["title"])
+        if len(core) >= 3:
+            names.add(core)
+            first = core.split()[0]
+            if len(first) >= 3:
+                names.add(first)
+    return names
+
+
+def _candidate_company_names(question: str) -> list[str]:
+    """Pull likely company mentions (runs of capitalized non-stopword words)."""
+    phrases: list[str] = []
+    current: list[str] = []
+    for token in re.findall(r"[A-Za-z0-9&.\-]+", question):
+        if token[:1].isupper() and token.lower() not in _NAME_STOPWORDS:
+            current.append(token)
+        elif current:
+            phrases.append(" ".join(current))
+            current = []
+    if current:
+        phrases.append(" ".join(current))
+
+    seen: set[str] = set()
+    unique: list[str] = []
+    for phrase in phrases:
+        if phrase.lower() not in seen:
+            seen.add(phrase.lower())
+            unique.append(phrase)
+    return unique
+
+
+def _is_known_filer(name: str, name_index: set[str]) -> bool:
+    low = name.lower()
+    return low in name_index or low.split()[0] in name_index
+
+
+def find_unrecognized_companies(question: str) -> tuple[list[str], list[str]]:
+    """Split company mentions into (recognized, not-in-SEC-list) names."""
+    name_index = _sec_name_index()
+    if not name_index:
+        return [], []
+    recognized, unknown = [], []
+    for candidate in _candidate_company_names(question):
+        (recognized if _is_known_filer(candidate, name_index) else unknown).append(candidate)
+    return recognized, unknown
+
+
 def ensure_companies_indexed(question: str, current_tickers: set[str]):
     """Fetch + index any company named in the question that isn't stored yet.
 
@@ -375,6 +452,13 @@ def stream_answer(agent, question: str):
     return final_answer, confidence_note, hops
 
 
+def _strip_scaffolding(text: str) -> str:
+    """Remove format placeholders the model sometimes echoes into the answer."""
+    text = re.sub(r"\(\s*no\s+(?:relevant\s+)?sources?\s*\)", "", text, flags=re.I)
+    text = re.sub(r"\s*\bNONE\b\s*$", "", text.strip(), flags=re.I)
+    return text.strip()
+
+
 def render_result(final_answer: str | None, note: str | None, hops: int) -> str:
     """Render the verified answer + note + hop count; return stored markdown.
 
@@ -389,6 +473,7 @@ def render_result(final_answer: str | None, note: str | None, hops: int) -> str:
     body = final_answer
     if note and body.endswith(note):
         body = body[: -len(note)].rstrip()
+    body = _strip_scaffolding(body)
 
     st.markdown(body)
     if note:
@@ -438,6 +523,26 @@ def handle_question(question: str, known_tickers: set[str]) -> None:
         st.markdown(question)
 
     with st.chat_message("assistant"):
+        recognized, unknown = find_unrecognized_companies(question)
+        for name in unknown:
+            st.warning(
+                f"“{name}” isn’t in the SEC EDGAR filings list — it looks like a "
+                "private company or a non-U.S. filer, so there are no 10-K/10-Q "
+                "filings to analyze."
+            )
+
+        if unknown and not recognized:
+            msg = (
+                "I can only answer about companies that file 10-Ks/10-Qs with the "
+                "SEC. Try a public company such as Apple, Microsoft, or Walmart."
+            )
+            st.info(msg)
+            not_listed = "; ".join(f"“{n}” is not in the SEC filings list" for n in unknown)
+            st.session_state.messages.append(
+                {"role": "assistant", "content": f"{not_listed}.\n\n{msg}"}
+            )
+            return
+
         added, notes = ensure_companies_indexed(question, known_tickers)
         for note_line in notes:
             st.caption(note_line)
